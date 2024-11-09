@@ -1,9 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, Label, Frame, END, messagebox
-from scapy.all import sniff, IP, TCP, UDP, ICMP, ARP, IPv6
+from scapy.all import sniff, IP, TCP, UDP, ICMP, ARP, IPv6, Raw
 import threading
-import io
-import sys
 import time
 import socket
 import re
@@ -15,6 +13,20 @@ packets = []  # 存储所有捕获的数据包
 sniffing_thread = None
 MAX_PACKETS = 600  # 最大记录的数据包数量
 SNIFF_TIMEOUT = 60  # 设置嗅探超时时间为 60 秒
+
+# 定义协议号到协议名称的映射表
+protocol_map = {
+    6: "TCP",
+    17: "UDP",
+    1: "ICMP",
+    2: "IGMP",
+    47: "GRE",
+    89: "OSPF",
+}
+
+# 定义一个函数来获取协议名称
+def get_protocol_name(proto_num):
+    return protocol_map.get(proto_num, f"Unknown-{proto_num}")
 
 # 定义一个函数来处理捕获的数据包
 def packet_callback(packet):
@@ -28,11 +40,18 @@ def packet_callback(packet):
         if IP in packet:
             src = packet[IP].src
             dst = packet[IP].dst
-            proto = packet[IP].proto
+            proto = get_protocol_name(packet[IP].proto)
         elif IPv6 in packet:
             src = packet[IPv6].src
             dst = packet[IPv6].dst
-            proto = packet[IPv6].nh
+            proto = get_protocol_name(packet[IPv6].nh)
+        elif ARP in packet:  # 处理 ARP 数据包
+            src = packet[ARP].psrc
+            dst = packet[ARP].pdst
+            proto = "ARP"
+        elif TCP in packet and (packet[TCP].dport == 80 or packet[TCP].sport == 80 or 
+                               packet[TCP].dport == 443 or packet[TCP].sport == 443):
+            proto = "HTTP"
         else:
             src = "未知"
             dst = "未知"
@@ -50,7 +69,9 @@ def build_lfilter(filter_exp):
         'icmp': 'ICMP in packet',
         'ip': 'IP in packet',
         'ipv6': 'IPv6 in packet',
-        'arp': 'ARP in packet'
+        'arp': 'ARP in packet',
+        'http': "TCP in packet and (packet[TCP].dport == 80 or packet[TCP].sport == 80 or " \
+                "packet[TCP].dport == 443 or packet[TCP].sport == 443)"  # 添加HTTP协议
     }
 
     for bpf_proto, py_expr in protocol_map.items():
@@ -203,7 +224,7 @@ top_frame = Frame(root)
 top_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
 # 创建表格来显示数据包信息
-tree = ttk.Treeview(top_frame, columns=('No.', 'Time', 'Source', 'Destination', 'Protocol', 'Info'), show='headings')
+tree =ttk.Treeview(top_frame, columns=('No.', 'Time', 'Source', 'Destination', 'Protocol', 'Info'), show='headings')
 tree.heading('No.', text='包序号')
 tree.heading('Time', text='时间')
 tree.heading('Source', text='源地址')
@@ -212,30 +233,30 @@ tree.heading('Protocol', text='协议')
 tree.heading('Info', text='信息')
 tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-# 添加滚动条
+#添加滚动条
 scrollbar = ttk.Scrollbar(top_frame, orient='vertical', command=tree.yview)
 tree.configure(yscrollcommand=scrollbar.set)
 scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-# 创建过滤表达式框架
+##创建过滤表达式框架
 filter_frame = Frame(root)
 filter_frame.pack(side=tk.TOP, fill=tk.X)
 
-# 创建过滤表达式输入框
+#创建过滤表达式输入框
 filter_label = Label(filter_frame, text="过滤表达式:")
 filter_label.pack(side=tk.LEFT, padx=5, pady=5)
 filter_entry = tk.Entry(filter_frame)
 filter_entry.pack(side=tk.LEFT, fill=tk.X, padx=10, pady=5, expand=True)
 
-# 创建底部框架用于放置按钮
+#创建底部框架用于放置按钮
 bottom_frame = Frame(root)
 bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
-# 创建右侧框架
+#创建右侧框架
 right_frame = Frame(root)
 right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-# 创建详细信息的 Treeview
+#创建详细信息的 Treeview
 details_tree_frame = Frame(right_frame)
 details_tree_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
@@ -246,31 +267,31 @@ details_tree.heading('Value', text='值')
 details_tree.column('Value', width=300)
 details_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-# 添加滚动条
+#添加滚动条
 details_scrollbar = ttk.Scrollbar(details_tree_frame, orient='vertical', command=details_tree.yview)
 details_tree.configure(yscrollcommand=details_scrollbar.set)
 details_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-# 创建按钮来启动和停止嗅探器
+#创建按钮来启动和停止嗅探器
 start_button = tk.Button(bottom_frame, text="开始嗅探", command=start_sniffing)
 start_button.pack(side=tk.LEFT, padx=5, pady=5)
 stop_button = tk.Button(bottom_frame, text="停止嗅探", command=stop_sniffing, state=tk.DISABLED)
 stop_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-# 创建按钮来显示选中数据包的详细信息
+#创建按钮来显示选中数据包的详细信息
 details_button = tk.Button(bottom_frame, text="显示详细信息", command=show_selected_packet_details)
 details_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-# 创建按钮来清除捕获的数据包
+#创建按钮来清除捕获的数据包
 clear_button = tk.Button(bottom_frame, text="清除捕获", command=clear_captures)
 clear_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-# 创建按钮来退出应用程序
+#创建按钮来退出应用程序
 exit_button = tk.Button(bottom_frame, text="退出", command=exit_application)
 exit_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-# 绑定双击事件以显示详细信息
+#绑定双击事件以显示详细信息
 tree.bind("<Double-1>", lambda event: show_selected_packet_details())
 
-# 运行程序
+#运行程序
 root.mainloop()
